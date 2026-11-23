@@ -84,6 +84,7 @@ struct ModsSectionView: View { // swiftlint:disable:this type_body_length
         let update = release.flatMap { release in
             current.flatMap { $0.mod.version == release.tagName ? nil : release.tagName }
         }
+        let canToggle = preset.install.ownFolder || preset.install.frozenCopy || preset.install.copyGame
         HStack(spacing: 12) {
             modIcon
             VStack(alignment: .leading, spacing: 2) {
@@ -114,6 +115,21 @@ struct ModsSectionView: View { // swiftlint:disable:this type_body_length
                 }
             }
             Spacer(minLength: 12)
+            if canToggle {
+                Toggle("", isOn: Binding(
+                    get: { isOn },
+                    set: { newValue in
+                        if newValue, let current {
+                            switchOn(current.folder)
+                        } else {
+                            turnOffMods()
+                        }
+                    }
+                ))
+                .toggleStyle(.switch)
+                .disabled(busy != nil || current == nil)
+                .help(isOn ? "Turn off this mod" : "Turn on this mod")
+            }
             presetActions(preset, current: current, isOn: isOn, update: update)
         }
         .padding(.vertical, 4)
@@ -124,10 +140,11 @@ struct ModsSectionView: View { // swiftlint:disable:this type_body_length
         _ preset: ModPreset, current: (mod: InstalledMod, folder: URL)?, isOn: Bool, update: String?
     ) -> some View {
         if let current {
+            let canToggle = preset.install.ownFolder || preset.install.frozenCopy || preset.install.copyGame
             if isOn {
                 Button("Play") { play(preset, modFolder: current.folder) }
                     .disabled(busy != nil)
-            } else if preset.install.ownFolder || preset.install.frozenCopy {
+            } else if canToggle {
                 Button("Turn On") { switchOn(current.folder) }
                     .disabled(busy != nil)
             }
