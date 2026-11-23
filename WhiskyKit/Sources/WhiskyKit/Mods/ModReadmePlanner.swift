@@ -109,30 +109,47 @@ public enum ModReadmePlanner {
         var reasons: [String] = []
         var confident = false
 
+        // Better detection of BepInEx plugin instructions:
+        // - "put the .dll in BepInEx/plugins"
+        // - "copy to BepInEx/plugins"
+        // - "extract to BepInEx/plugins"
+        // - any mention of "plugins" folder alongside DLL/zip context
         let pluginLine = evidence(["bepinex", "plugins"])
+        let pluginFolderLine = evidence(["plugins"]) // standalone "plugins" folder mention
         let extractLine = evidence(["extract"]) ?? evidence(["unzip"])
         let copyLine = evidence(["copy", "folder"]) ?? evidence(["duplicate", "folder"])
+        let dllLine = evidence([".dll"]) // explicit DLL mention
         let wantsCopy = copyLine.map { line in
             let line = line.lowercased()
             return line.contains("game") || line.contains("among us") || line.contains("install")
         } ?? false
 
-        guard let asset = pickAsset(release.assets, preferDLL: pluginLine != nil && extractLine == nil) else {
+        // Determine if this looks like a BepInEx plugin mod
+        let isLikelyBepInExPlugin = (pluginLine != nil)
+            || (pluginFolderLine != nil && (dllLine != nil || !isZip))
+            || (dllLine != nil && (extractLine == nil || pluginFolderLine != nil))
+
+        guard let asset = pickAsset(release.assets, preferDLL: isLikelyBepInExPlugin && extractLine == nil) else {
             return nil
         }
         let isZip = asset.name.lowercased().hasSuffix(".zip")
 
         var rule: ModInstallRule
         if !isZip {
-            rule = ModInstallRule(mode: .copyFile, subpath: pluginLine != nil ? "BepInEx/plugins" : "")
+            // Single DLL file - if it looks like a BepInEx plugin, put in plugins folder
+            rule = ModInstallRule(mode: .copyFile, subpath: isLikelyBepInExPlugin ? "BepInEx/plugins" : "")
             if let pluginLine { reasons.append(pluginLine); confident = true }
+            else if let pluginFolderLine { reasons.append(pluginFolderLine); confident = true }
+            else if let dllLine { reasons.append(dllLine) }
         } else {
-            // "Extract into your game folder" wins; a zip that only talks about
-            // plugins is a plugin bundle.
-            let subpath = (pluginLine != nil && extractLine == nil) ? "BepInEx/plugins" : ""
+            // ZIP file - check if it's a plugin bundle (talks about plugins but not general extract)
+            let subpath = (isLikelyBepInExPlugin && extractLine == nil) ? "BepInEx/plugins" : ""
             rule = ModInstallRule(mode: .extract, subpath: subpath)
             if let extractLine { reasons.append(extractLine); confident = true }
-            if subpath.isEmpty == false, let pluginLine { reasons.append(pluginLine) }
+            if subpath.isEmpty == false {
+                if let pluginLine { reasons.append(pluginLine) }
+                else if let pluginFolderLine { reasons.append(pluginFolderLine) }
+            }
         }
         if wantsCopy, let copyLine {
             rule.copyGame = true

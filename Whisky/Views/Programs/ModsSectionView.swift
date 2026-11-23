@@ -655,15 +655,22 @@ struct ModsSectionView: View { // swiftlint:disable:this type_body_length
     }
 
     /// Installs what a mod needs: other mods from their latest releases (into
-    /// the same game folder, following their own install steps) and Windows
-    /// runtimes through winetricks. Returns a line per dependency for the user.
+    /// the same game folder, following their own install steps), BepInEx if
+    /// required, and Windows runtimes through winetricks. Returns a line per
+    /// dependency for the user.
     private func installDependencies(
         _ deps: ModDependencies, into result: ModInstallResult, seen: Set<String>, depth: Int = 0
     ) async -> [String] {
         var notes: [String] = []
         var seen = seen
         if deps.needsBepInEx, !ModInstaller.hasBepInEx(result.gameFolder) {
-            notes.append("This mod needs BepInEx, which isn't in its download. Use a build that includes it.")
+            // Install BepInEx from its GitHub releases
+            do {
+                let bepInExNotes = try await installBepInEx(into: result.gameFolder)
+                notes += bepInExNotes
+            } catch {
+                notes.append("Failed to install BepInEx: \(error.localizedDescription)")
+            }
         }
         for repo in deps.repos where depth < 3 && !seen.contains(repo.lowercased()) {
             seen.insert(repo.lowercased())
@@ -698,6 +705,33 @@ struct ModsSectionView: View { // swiftlint:disable:this type_body_length
             }
         }
         notes += await installRuntimes(deps.runtimeVerbs)
+        return notes
+    }
+
+    /// Installs BepInEx from GitHub releases into the game folder.
+    /// Returns notes about what was installed.
+    private func installBepInEx(into gameFolder: URL) async throws -> [String] {
+        var notes: [String] = []
+        let repo = "BepInEx/BepInEx"
+        busy = "Installing BepInEx…"
+        defer { busy = nil }
+        async let readme = GitHubReleases.readme(repo: repo)
+        let release = try await GitHubReleases.latestRelease(repo: repo)
+        guard let plan = ModReadmePlanner.plan(readme: try? await readme, release: release, repo: repo),
+              let asset = release.assets.first(where: { $0.name.lowercased().hasSuffix(".zip") }) ?? plan.asset else {
+            throw NSError(domain: "ModInstaller", code: -1, userInfo: [NSLocalizedDescriptionKey: "No suitable BepInEx release asset found"])
+        }
+        var rule = plan.rule
+        rule.copyGame = false
+        // BepInEx goes into the game root (it creates BepInEx/ folder)
+        rule.subpath = ""
+        let result = try await ModInstaller.install(
+            asset: asset, version: release.tagName, name: "BepInEx", repo: repo,
+            rule: rule, gameExecutable: gameFolder.appending(path: program.url.lastPathComponent)
+        )
+        notes.append("Installed BepInEx \(release.tagName).")
+        // Ensure the winhttp.dll override is set for the game
+        useModLoader(in: result)
         return notes
     }
 
